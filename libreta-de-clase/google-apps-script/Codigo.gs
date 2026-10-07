@@ -21,7 +21,7 @@ const NOTA_APRUEBA = 5;
 const MAX_CELDA = 49000; // Sheets admite hasta 50.000 caracteres por celda
 
 const COLOR = { ok: '#dcf1e5', ape: '#f8ecc9', falta: '#f8e0de', tarde: '#f8ecc9', just: '#e8e4f8', cab: '#e9edf5' };
-const VER = { P: 'P', A: 'A', T: 'T', J: 'J', S: '✓', M: '½', N: '✗' };
+const VER = { P: 'P', A: 'A', T: 'T', J: 'J', S: '✓', M: '½', N: '✗', CMB: 'MB', CB: 'B', CR: 'R', CM: 'M' };
 
 function doGet() {
   return salida({ ok: true, data: 'Libreta de Clase: el servicio está activo.' });
@@ -208,9 +208,9 @@ function hojaLegible(gid) {
         const x = (v[e.id] || {})[k.id];
         if (x === undefined || x === '') { r.push(''); bg.push(null); return; }
         if (k.tipo === 'nota') { const n = Number(x); r.push(n); bg.push(n >= NOTA_APRUEBA ? COLOR.ok : COLOR.ape); }
-        else if (k.tipo === 'asistencia' || k.tipo === 'entrega') {
+        else if (k.tipo === 'asistencia' || k.tipo === 'entrega' || k.tipo === 'conducta') {
           r.push(VER[x] || x);
-          bg.push({ P: COLOR.ok, S: COLOR.ok, A: COLOR.falta, N: COLOR.falta, T: COLOR.tarde, M: COLOR.tarde, J: COLOR.just }[x] || null);
+          bg.push({ P: COLOR.ok, S: COLOR.ok, A: COLOR.falta, N: COLOR.falta, T: COLOR.tarde, M: COLOR.tarde, J: COLOR.just, CMB: COLOR.ok, CB: COLOR.ok, CR: COLOR.tarde, CM: COLOR.falta }[x] || null);
         } else { r.push(String(x)); bg.push(null); }
       });
       while (r.length < ancho) { r.push(''); bg.push(null); }
@@ -219,6 +219,7 @@ function hojaLegible(gid) {
   });
   fila([]);
   fila(['Referencias: P presente · A ausente · T tarde · J justificada · ✓ hecho · ½ parcial · ✗ no hecho']);
+  fila(['Conducta: MB muy buena · B buena · R regular · M mala']);
 
   h.clear();
   h.getRange(1, 1, vals.length, ancho).setValues(vals).setBackgrounds(fondos);
