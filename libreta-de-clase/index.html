@@ -149,7 +149,7 @@ textarea.field{width:100%;min-height:110px;resize:vertical}
       <button type="button" class="btn ghost" id="ngCancel">Cancelar</button>
     </form>
   </div>
-  <div id="localBanner" class="banner" hidden>Esta vista no tiene acceso al guardado en la nube, así que los datos se guardan solo en este navegador. Usá <b>Respaldo → Exportar</b> para no perderlos.</div>
+  <div id="localBanner" class="banner" hidden>Esta vista no tiene acceso al guardado en la nube, así que los datos se guardan solo en este navegador. Para guardarlos en una planilla de Google Sheets, conectala en <b>Estudiantes y columnas → Google Sheets</b>, o exportá un respaldo seguido.</div>
 
   <nav class="tabs" role="tablist">
     <button class="tab" role="tab" data-tab="clase" aria-selected="true">Clase del día</button>
@@ -192,42 +192,66 @@ const defaultCols = () => [
   { id: "obs", nombre: "Observación", tipo: "texto" }
 ];
 
-/* ---------- almacenamiento: nube (db) o navegador ---------- */
-const LSKEY = "libreta-clase:v1";
+/* ---------- almacenamiento: nube de claude.ai (db), Google Sheets o navegador ---------- */
+const LSKEY = "libreta-clase:v1", GSKEY = LSKEY + ":sheets";
+const IN_CLAUDE = !!(window.claude && window.claude.use);
+const CAN_SHEETS = !IN_CLAUDE; // dentro de claude.ai la página no puede conectarse a sitios externos
+const SCRIPT_URL_REPO = "https://github.com/adelvalle2010/material-programacion-avanzada/blob/main/libreta-de-clase/google-apps-script/Codigo.gs";
 const Store = {
-  db: null, mode: "local",
+  db: null, gs: null, mode: "local",
   async init(){
-    try { if (window.claude && window.claude.use) this.db = await window.claude.use("db"); } catch(e) { this.db = null; }
-    this.mode = this.db ? "db" : "local";
+    try { if (IN_CLAUDE) this.db = await window.claude.use("db"); } catch(e) { this.db = null; }
+    if (!this.db && CAN_SHEETS) { try { const o = JSON.parse(localStorage.getItem(GSKEY)); if (o && o.url && o.clave) this.gs = o; } catch(e) {} }
+    this.mode = this.db ? "db" : this.gs ? "sheets" : "local";
+  },
+  async call(accion, extra, cfg){
+    cfg = cfg || this.gs; let r, j;
+    try { r = await fetch(cfg.url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ accion, clave: cfg.clave, ...(extra || {}) }) }); }
+    catch(e) { throw { code: "unavailable", message: "No se pudo contactar a Google Sheets. Revisá la conexión a internet y la URL." }; }
+    try { j = await r.json(); } catch(e) { throw { code: "sheets_bad", message: "Esa URL no responde como el script de la libreta. Revisá que termine en /exec y que el acceso sea «Cualquier usuario»." }; }
+    if (!j.ok) throw { code: j.error || "sheets_error", message: j.mensaje || "Google Sheets devolvió un error." };
+    return j.data;
   },
   _ls(){ try { return JSON.parse(localStorage.getItem(LSKEY)) || { grupos:{}, clases:{} }; } catch(e) { return { grupos:{}, clases:{} }; } },
   _lsw(o){ try { localStorage.setItem(LSKEY, JSON.stringify(o)); } catch(e) { throw { code:"local_failed", message:"El navegador no permitió guardar." }; } },
   async retry(fn){ try { return await fn(); } catch(e) { if (e && e.code === "unavailable") { await new Promise(r => setTimeout(r, 400 + Math.random()*600)); return fn(); } throw e; } },
   async grupos(){
     if (this.db) { const s = await this.retry(() => this.db.collection("grupos").get()); return s.docs.map(d => ({ id: d.id, ...clone(d.data()) })); }
+    if (this.gs) return this.call("grupos");
     const o = this._ls(); return Object.entries(o.grupos).map(([id, g]) => ({ id, ...g }));
   },
   async saveGrupo(g){
     const { id, ...body } = g;
     if (this.db) return this.retry(() => this.db.doc("grupos/" + id).set(body));
+    if (this.gs) return this.call("guardarGrupo", { grupo: id, datos: body });
     const o = this._ls(); o.grupos[id] = body; this._lsw(o);
   },
   async deleteGrupo(id, fechas){
     if (this.db) { for (const f of fechas) await this.retry(() => this.db.doc(`grupos/${id}/clases/${f}`).delete()); return this.retry(() => this.db.doc("grupos/" + id).delete()); }
+    if (this.gs) return this.call("borrarGrupo", { grupo: id });
     const o = this._ls(); delete o.grupos[id]; delete o.clases[id]; this._lsw(o);
   },
   async clases(gid){
     if (this.db) { const s = await this.retry(() => this.db.collection(`grupos/${gid}/clases`).get()); const r = {}; s.docs.forEach(d => r[d.id] = clone(d.data())); return r; }
+    if (this.gs) return this.call("clases", { grupo: gid });
     const o = this._ls(); return clone(o.clases[gid] || {});
   },
   async saveClase(gid, c){
     if (this.db) return this.retry(() => this.db.doc(`grupos/${gid}/clases/${c.fecha}`).set(c));
+    if (this.gs) return this.call("guardarClase", { grupo: gid, clase: c });
     const o = this._ls(); (o.clases[gid] ||= {})[c.fecha] = c; this._lsw(o);
   },
   async deleteClase(gid, f){
     if (this.db) return this.retry(() => this.db.doc(`grupos/${gid}/clases/${f}`).delete());
+    if (this.gs) return this.call("borrarClase", { grupo: gid, fecha: f });
     const o = this._ls(); if (o.clases[gid]) delete o.clases[gid][f]; this._lsw(o);
-  }
+  },
+  async importar(grupos){ // grupos con sus clases adentro, de una sola vez
+    if (this.gs) return this.call("importar", { grupos });
+    for (const gr of grupos) { const { clases, ...g } = gr; await this.saveGrupo(g); for (const [f, c] of Object.entries(clases || {})) await this.saveClase(g.id, { ...c, fecha: f }); }
+  },
+  localTiene(){ const o = this._ls(); return Object.keys(o.grupos).length; },
+  localTodo(){ const o = this._ls(); return Object.entries(o.grupos).map(([id, g]) => ({ id, ...g, clases: o.clases[id] || {} })); }
 };
 
 /* ---------- estado ---------- */
@@ -241,6 +265,7 @@ const pend = new Map(); let inflight = 0;
 function setStatus(kind, txt){ const el = $("#status"); el.className = "status " + kind; $("#statusTxt").textContent = txt; }
 function idleStatus(){
   if (Store.mode === "local") setStatus("local", "Guardado en este navegador");
+  else if (Store.mode === "sheets") { const d = new Date(); setStatus("", `Guardado en Google Sheets ${pad(d.getHours())}:${pad(d.getMinutes())}`); }
   else { const d = new Date(); setStatus("", `Guardado ${pad(d.getHours())}:${pad(d.getMinutes())}`); }
 }
 function schedule(key, fn){
@@ -248,7 +273,7 @@ function schedule(key, fn){
   clearTimeout(pend.get(key)); pend.set(key, setTimeout(async () => {
     pend.delete(key); inflight++;
     try { await fn(); if (!--inflight && !pend.size) idleStatus(); }
-    catch(e) { inflight--; console.error(e); setStatus("error", e && e.code === "quota_exceeded" ? "Sin espacio para guardar" : "No se pudo guardar. Revisá la conexión y volvé a editar."); }
+    catch(e) { inflight--; console.error(e); setStatus("error", e && e.code === "quota_exceeded" ? "Sin espacio para guardar" : Store.mode === "sheets" && e && e.message ? "No se guardó en Sheets: " + e.message : "No se pudo guardar. Revisá la conexión y volvé a editar."); }
   }, 650));
 }
 const saveGrupoSoon = () => { const g = clone(grupo()); schedule("g:" + g.id, () => Store.saveGrupo(g)); };
@@ -259,14 +284,20 @@ window.addEventListener("beforeunload", e => { if (pend.size || inflight) { e.pr
 async function boot(){
   render();
   await Store.init();
+  await loadAll();
+}
+async function loadAll(){
+  S.loading = true; S.grupos = []; render();
   $("#localBanner").hidden = Store.mode !== "local";
+  setStatus("saving", Store.mode === "sheets" ? "Leyendo Google Sheets…" : "Cargando…");
+  let fallo = false;
   try { S.grupos = await Store.grupos(); }
-  catch(e) { console.error(e); setStatus("error", "No se pudieron leer los datos"); }
+  catch(e) { console.error(e); fallo = true; setStatus("error", Store.mode === "sheets" ? "No se pudo leer Google Sheets: " + (e.message || "error") : "No se pudieron leer los datos"); }
   S.grupos.sort((a,b) => (a.creado || "").localeCompare(b.creado || ""));
   let last = null; try { last = localStorage.getItem(LSKEY + ":ultimo"); } catch(e) {}
   S.gid = (S.grupos.find(g => g.id === last) || S.grupos[0] || {}).id || null;
   await loadClases();
-  S.loading = false; idleStatus(); render();
+  S.loading = false; if (!fallo) idleStatus(); render();
 }
 async function loadClases(){
   S.clases = {};
@@ -285,7 +316,7 @@ function render(){
   document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tab === S.tab)));
   const v = $("#view");
   if (S.loading) { v.innerHTML = `<div class="panel"><div class="empty">Cargando tus datos guardados…</div></div>`; return; }
-  if (!g) { v.innerHTML = `<div class="panel"><div class="empty"><h2>Todavía no hay grupos</h2><p>Creá un grupo con <b>+ Grupo</b>. Después cargás la lista de estudiantes pegándola o importando tu planilla de Excel.</p><button class="btn primary" data-act="newgroup">Crear el primer grupo</button></div></div>`; return; }
+  if (!g) { v.innerHTML = `<div class="panel"><div class="empty"><h2>Todavía no hay grupos</h2><p>Creá un grupo con <b>+ Grupo</b>. Después cargás la lista de estudiantes pegándola o importando tu planilla de Excel.</p><button class="btn primary" data-act="newgroup">Crear el primer grupo</button>${Store.mode === "sheets" && Store.localTiene() ? `<p style="margin:8px 0 0">La planilla de Google Sheets está vacía, pero este navegador tiene datos guardados.</p><button class="btn" data-act="gsSubir">Copiar a Sheets lo guardado en este navegador</button>` : ""}${S.gsMsg ? `<p class="muted">${esc(S.gsMsg)}</p>` : ""}${CAN_SHEETS && Store.mode !== "sheets" ? `<p class="muted" style="margin:8px 0 0">¿Ya usás una planilla de Google Sheets? Conectala en Estudiantes y columnas después de crear un grupo.</p>` : ""}</div></div>`; return; }
   v.innerHTML = S.tab === "clase" ? viewClase(g) : S.tab === "resumen" ? viewResumen(g) : viewConfig(g);
   if (S.tab === "clase") updateStats();
 }
@@ -449,13 +480,59 @@ function viewConfig(g){
           <select class="field" id="newColT" aria-label="Tipo">${Object.entries(TIPOS).map(([t, d]) => `<option value="${t}"${t==="entrega"?" selected":""}>${d.label}</option>`).join("")}</select>
           <button class="btn">Agregar</button></form>
       </section>
+      ${CAN_SHEETS ? viewSheets() : ""}
       <section class="panel">
         <h2>Respaldo</h2>
-        <p class="muted" style="margin:0">${Store.mode === "db" ? "Todo se guarda solo en la nube mientras editás; podés abrir esta página desde otro equipo y seguir. El respaldo es una copia extra en un archivo." : "Los datos están solo en este navegador. Exportá un respaldo para no perderlos."}</p>
+        <p class="muted" style="margin:0">${Store.mode === "db" ? "Todo se guarda solo en la nube mientras editás; podés abrir esta página desde otro equipo y seguir. El respaldo es una copia extra en un archivo." : Store.mode === "sheets" ? "Todo se guarda en tu planilla de Google Sheets mientras editás. El respaldo es una copia extra en un archivo." : "Los datos están solo en este navegador. Exportá un respaldo para no perderlos."}</p>
         <div class="row">${DL.api ? `<button class="btn" data-act="exportjson">Exportar respaldo (.json)</button>` : ""}<label class="btn" for="jsonIn">Restaurar desde respaldo</label><input type="file" id="jsonIn" accept=".json,application/json" hidden></div>
       </section>
     </div>
   </div>`;
+}
+
+function viewSheets(){
+  if (Store.mode === "sheets") {
+    const hayLocal = Store.localTiene();
+    return `<section class="panel">
+      <div class="row spread"><h2>Google Sheets</h2><span class="pill">Conectada</span></div>
+      <p style="margin:0">Guardando en la planilla <b>${esc(Store.gs.planilla || "de Google Sheets")}</b>. Cada grupo tiene además una hoja legible con la libreta armada.</p>
+      ${S.gsMsg ? `<p class="muted" style="margin:0">${esc(S.gsMsg)}</p>` : ""}
+      <div class="row">
+        ${hayLocal ? `<button class="btn" data-act="gsSubir">Copiar a Sheets lo guardado en este navegador</button>` : ""}
+        ${S.confirm === "gsoff" ? `<span class="confirm">¿Desconectar? Los datos quedan en la planilla. <button class="btn sm danger" data-act="gsOff">Desconectar</button><button class="btn sm" data-act="cancel">No</button></span>` : `<button class="btn ghost" data-act="ask" data-k="gsoff">Desconectar</button>`}
+      </div>
+    </section>`;
+  }
+  return `<section class="panel">
+    <h2>Google Sheets</h2>
+    <p class="muted" style="margin:0">Conectá una planilla tuya para que todo se guarde ahí y puedas abrir la libreta desde cualquier equipo.</p>
+    <details><summary><b>Cómo prepararla</b> <span class="muted">(una sola vez, 5 minutos)</span></summary>
+      <ol style="margin:10px 0 0;padding-left:20px;display:grid;gap:6px">
+        <li>Creá una planilla nueva en Google Sheets.</li>
+        <li>Abrí <b>Extensiones → Apps Script</b>, borrá lo que haya y pegá el <a href="${SCRIPT_URL_REPO}" target="_blank" rel="noopener">código del script</a>.</li>
+        <li>Cambiá <code>CAMBIAR-ESTA-CLAVE</code> por una clave tuya y guardá.</li>
+        <li><b>Implementar → Nueva implementación</b>, tipo <b>Aplicación web</b>. Ejecutar como: <b>Yo</b>. Quién tiene acceso: <b>Cualquier usuario</b>. Autorizá los permisos.</li>
+        <li>Copiá la URL que termina en <code>/exec</code> y pegala acá con la clave.</li>
+      </ol></details>
+    <form id="gsForm" style="display:grid;gap:8px">
+      <input class="field" id="gsUrl" placeholder="https://script.google.com/macros/s/…/exec" aria-label="URL de la aplicación web" value="${esc(S.gsUrl || "")}" required>
+      <input class="field" id="gsClave" type="password" placeholder="Clave del script" aria-label="Clave" value="${esc(S.gsClave || "")}" required autocomplete="off">
+      <div class="row"><button class="btn primary" id="gsBtn">Conectar</button>${S.gsMsg ? `<span class="muted">${esc(S.gsMsg)}</span>` : ""}</div>
+    </form>
+  </section>`;
+}
+async function gsConectar(url, clave){
+  url = url.trim(); clave = clave.trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) { S.gsMsg = "La URL tiene que ser la de la aplicación web y terminar en /exec."; render(); return; }
+  S.gsMsg = "Probando la conexión…"; render();
+  try {
+    const info = await Store.call("ping", {}, { url, clave });
+    const cfg = { url, clave, planilla: info && info.planilla };
+    try { localStorage.setItem(GSKEY, JSON.stringify(cfg)); } catch(e) {}
+    Store.gs = cfg; Store.mode = "sheets"; S.gsClave = "";
+    S.gsMsg = Store.localTiene() ? "Conectada. Si querés llevar a la planilla lo que ya tenías en este navegador, usá el botón «Copiar a Sheets»." : "";
+    await loadAll(); toast("Conectada a Google Sheets");
+  } catch(e) { S.gsMsg = e.message || "No se pudo conectar."; render(); }
 }
 
 /* ---------- acciones ---------- */
@@ -504,6 +581,10 @@ document.addEventListener("click", async ev => {
   if (act === "paste") { addNames(($("#pasteList").value || "").split(/\r?\n/)); return; }
   if (act === "xlsx") { exportXlsx(g); return; }
   if (act === "exportjson") { exportJson(); return; }
+  if (act === "gsOff") { try { localStorage.removeItem(GSKEY); } catch(e) {} Store.gs = null; Store.mode = "local"; S.confirm = null; S.gsMsg = ""; await loadAll(); toast("Desconectada de Google Sheets"); return; }
+  if (act === "gsSubir") { const todo = Store.localTodo(); S.gsMsg = "Copiando…"; render(); setStatus("saving", "Copiando a Google Sheets…");
+    try { await Store.importar(todo); S.gsMsg = `Se copiaron ${todo.length} grupo${todo.length===1?"":"s"} a la planilla.`; await loadAll(); }
+    catch(e) { S.gsMsg = e.message || "No se pudo copiar."; setStatus("error", "No se pudo copiar a Sheets"); render(); } return; }
 });
 
 document.addEventListener("input", ev => {
@@ -534,6 +615,7 @@ document.addEventListener("submit", ev => {
   ev.preventDefault(); const f = ev.target, g = grupo();
   if (f.id === "addStu") { const v = $("#newStu").value; addNames([v]); setTimeout(() => $("#newStu")?.focus(), 0); }
   if (f.id === "addCol") { const n = $("#newCol").value.trim(); if (!n) return; g.columnas.push({ id: uid("k"), nombre: n, tipo: $("#newColT").value }); saveGrupoSoon(); render(); }
+  if (f.id === "gsForm") { S.gsUrl = $("#gsUrl").value; S.gsClave = $("#gsClave").value; gsConectar($("#gsUrl").value, $("#gsClave").value); return; }
   if (f.id === "ngForm") { const n = $("#ngName").value.trim(); if (!n) return; createGroup(n); showNG(false); $("#ngName").value = ""; }
 });
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => { S.tab = b.dataset.tab; S.confirm = null; render(); }));
@@ -601,12 +683,9 @@ function importJson(file){
     if (!o || o.app !== "libreta-clase" || !Array.isArray(o.grupos)) { toast("Ese archivo no es un respaldo de la libreta"); return; }
     setStatus("saving", "Restaurando…"); let n = 0;
     try {
-      for (const gr of o.grupos) {
-        const { clases, ...g } = gr; if (!g.id || !g.nombre) continue;
-        await Store.saveGrupo(g);
-        for (const [f, c] of Object.entries(clases || {})) if (/^\d{4}-\d{2}-\d{2}$/.test(f)) await Store.saveClase(g.id, { ...c, fecha: f });
-        const i = S.grupos.findIndex(x => x.id === g.id); if (i >= 0) S.grupos[i] = g; else S.grupos.push(g); n++;
-      }
+      const validos = o.grupos.filter(gr => gr && gr.id && gr.nombre).map(gr => ({ ...gr, clases: Object.fromEntries(Object.entries(gr.clases || {}).filter(([f]) => /^\d{4}-\d{2}-\d{2}$/.test(f))) }));
+      await Store.importar(validos);
+      for (const gr of validos) { const { clases, ...g } = gr; const i = S.grupos.findIndex(x => x.id === g.id); if (i >= 0) S.grupos[i] = g; else S.grupos.push(g); n++; }
       if (!S.gid && S.grupos[0]) S.gid = S.grupos[0].id;
       await loadClases(); idleStatus(); render(); toast(`Respaldo restaurado: ${n} grupo${n===1?"":"s"}`);
     } catch(e) { console.error(e); setStatus("error", "La restauración quedó incompleta"); }
