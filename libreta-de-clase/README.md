@@ -11,8 +11,9 @@ Es un solo archivo (`index.html`), sin servidor ni instalación.
   - Presente: `P` presente · `A` ausente · `T` tarde · `J` falta justificada
   - Actividad: `✓` hecho · `½` parcial · `✗` no hecho
   - Nota: de 1 a 10 (verde si es 5 o más, ámbar si es de 1 a 4)
+  - Conducta: `MB` muy buena · `B` buena · `R` regular · `M` mala
   - Observación: texto libre
-- **Resumen del grupo:** % de asistencia (en rojo si es menos de 75 %), faltas, entregas, promedio y situación (**Aprobado** con 5 o más, **APE** de 1 a 4).
+- **Resumen del grupo:** % de asistencia (en rojo si es menos de 75 %), faltas, entregas, promedio, situación (**Aprobado** con 5 o más, **APE** de 1 a 4) y conducta (cantidad de MB/B/R/M y la última registrada).
 - **Excel:** descarga una planilla con tres hojas (Planilla, Resumen, Detalle).
 - **Estudiantes:** se agregan de a uno, pegando una lista o importando la plantilla de Excel (lee la fila con `fecha | presente | actividad | nota | nombres…`).
 - **Columnas configurables:** por ejemplo "Ejercicio 2" o "Tarea domiciliaria".
