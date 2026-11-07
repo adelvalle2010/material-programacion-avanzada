@@ -155,14 +155,40 @@ textarea.field{width:100%;min-height:110px;resize:vertical}
 .sum td.ficcol.warn{background:var(--warn-soft);color:var(--warn)} .sum td.ficcol.bad{background:var(--bad-soft);color:var(--bad)}
 .cfgnum{width:90px;text-align:center;font-family:var(--f-mono)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:.9rem;z-index:20}
+.vozbox{border:1px solid var(--line);background:var(--soft);border-radius:10px;padding:10px 12px;display:grid;gap:8px}
+.vozbox .btn[aria-pressed="true"]{background:var(--bad);border-color:var(--bad);color:#fff}
+.vozlog{list-style:none;margin:0;padding:0;display:grid;gap:3px;font-size:.86rem;max-height:9.5em;overflow:auto}
+.vozlog:empty{display:none}
+.vozlog li.ok{color:var(--ok)} .vozlog li.no{color:var(--warn)}
+.vozayuda{font-size:.86rem;display:grid;gap:4px;margin-top:6px} .vozayuda p,.vozayuda ul{margin:0} .vozayuda ul{padding-left:18px;display:grid;gap:3px}
+details summary{cursor:pointer}
+tr.flash td{animation:flash 1.6s ease-out}
+@keyframes flash{0%{background:var(--accent-soft)}100%{background:var(--paper)}}
+.nm{border:0;background:none;padding:0;font:inherit;font-weight:700;color:inherit;text-align:left;cursor:pointer}
+.nm:hover{color:var(--accent);text-decoration:underline}
+.lnk{border:0;background:none;padding:0;font:inherit;color:var(--accent);cursor:pointer;text-decoration:underline;white-space:nowrap}
+.navc{min-width:34px;justify-content:center}
+.modal{position:fixed;inset:0;background:rgba(10,14,22,.5);display:grid;justify-items:center;align-items:start;overflow:auto;padding:calc(24px + env(safe-area-inset-top,0px)) 16px 24px;z-index:30}
+.modal .ficha{max-width:1000px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,.25)}
+.stat.warn{background:var(--warn-soft);color:var(--warn)} .stat.bad{background:var(--bad-soft);color:var(--bad)}
+.fichatab td{vertical-align:top} .fichatab .tcell{min-width:180px;max-width:360px;white-space:pre-wrap}
 @media (prefers-reduced-motion:no-preference){.chip,.btn,.cyc{transition:background .12s,border-color .12s}}
+@media (prefers-reduced-motion:reduce){tr.flash td{animation:none}}
+@media print{
+  :root:not(#_){--bg:#fff;--paper:#fff;--ink:#000;--muted:#444;--line:#bbb;--soft:#eee;color-scheme:light}
+  body{background:#fff;font-size:12px}
+  .groupbar,.tabs,.banner,.noprint,.btn,.tb,.toast,.legend,.addx,.xdel,.hchip{display:none!important}
+  .wrap{padding:0;max-width:none} .panel{border:0;padding:0}
+  .sheet{overflow:visible;border:0} th.name,td.name,thead th{position:static}
+  body.ficha-open .wrap{display:none} .modal{position:static;background:none;padding:0;overflow:visible} .modal .ficha{box-shadow:none;max-width:none}
+}
 @media (max-width:560px){h1{font-size:1.35rem}.panel{padding:14px}th.name,td.name{min-width:130px}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="brand"><h1>Libreta de Clase</h1><small class="ver" title="Versión de la página">v6 · 30/10</small><small id="groupLabel">Cargando…</small></div>
+    <div class="brand"><h1>Libreta de Clase</h1><small class="ver" title="Versión de la página">v7 · 06/11</small><small id="groupLabel">Cargando…</small></div>
     <div class="groupbar">
       <select id="groupSel" class="field" aria-label="Grupo"></select>
       <button class="btn" id="newGroupBtn">+ Grupo</button>
@@ -191,6 +217,7 @@ textarea.field{width:100%;min-height:110px;resize:vertical}
   <main id="view"><div class="panel"><div class="empty">Cargando tus datos guardados…</div></div></main>
 </div>
 <div class="toast" id="toast" hidden></div>
+<div id="fichaBox"></div>
  
 <script>
 "use strict";
@@ -293,7 +320,7 @@ const volverSel = () => { const el = $("#tema"); if (!el) return;
 document.addEventListener("selectionchange", guardarSel);
 /* dictado por voz (Chrome / Edge) */
 const RecVoz = window.SpeechRecognition || window.webkitSpeechRecognition;
-const VOZ = !!RecVoz;
+const VOZ = !!RecVoz && !(window.claude && window.claude.use); // dentro de claude.ai la página no puede usar el micrófono
 let rec = null;
 let ultimoDictado = { n: "", t: 0 };
 /* Comandos de puntuación dichos en voz alta ("coma", "punto", "punto y aparte"…).
@@ -338,6 +365,7 @@ function insertarDictado(txt){
 function vozToggle(){
   const btn = $("#micBtn"), info = $("#vozTxt");
   if (rec) { rec.activo = false; rec.stop(); return; }
+  if (recCmd) { recCmd.activo = false; recCmd.stop(); } // un solo dictado a la vez
   /* En Chrome de Android el modo continuo devuelve el texto acumulado varias veces.
      Ahí se dicta frase por frase (y se reinicia solo), y además se descarta lo que ya se escribió. */
   const ANDROID = /Android/i.test(navigator.userAgent);
@@ -605,6 +633,7 @@ function render(){
   v.innerHTML = S.tab === "clase" ? viewClase(g) : S.tab === "resumen" ? viewResumen(g) : viewConfig(g);
   if (S.tab === "clase") updateStats();
   if (S.tab === "config") pesosPct(g);
+  pintarFicha();
 }
  
 /* ---------- vista: clase del día ---------- */
@@ -629,7 +658,7 @@ function viewClase(g){
         <form class="row" id="addX"><input class="field" id="xName" placeholder="Otra (ej.: Trabajo práctico)" aria-label="Nombre de la columna del día" style="flex:1 1 170px"><select class="field" id="xTipo" aria-label="Tipo">${TIPOS_DIA.map(t => `<option value="${t}">${TIPOS[t].label}</option>`).join("")}</select><button class="btn sm">Agregar</button></form>
         ${xconf ? `<span class="confirm">¿Quitar «${esc(xconf.nombre)}» de este día y lo anotado ahí? <button class="btn sm danger" data-act="delx-yes">Quitar</button><button class="btn sm" data-act="cancel">No</button></span>` : ""}
       </div>`;
-    const rows = est.map((e, i) => `<tr><td class="name"><span class="idx">${i+1}</span>${esc(e.nombre)}${badgeFictas(g, e)}</td>${cols.map(k => cell(c, e, k)).join("")}</tr>`).join("");
+    const rows = est.map((e, i) => `<tr data-sid="${esc(e.id)}"><td class="name"><span class="idx">${i+1}</span><button class="nm" data-act="ficha" data-sid="${esc(e.id)}" title="Ver la ficha de ${esc(e.nombre)}">${esc(e.nombre)}</button>${badgeFictas(g, e)}</td>${cols.map(k => cell(c, e, k)).join("")}</tr>`).join("");
     const asis = cols.find(k => k.tipo === "asistencia");
     const conf = S.confirm === "delclase" ? `<span class="confirm">¿Borrar esta clase y todo lo marcado? <button class="btn sm danger" data-act="delclase-yes">Borrar</button><button class="btn sm" data-act="cancel">No</button></span>` : `<button class="btn sm danger ghost" data-act="ask" data-k="delclase">Borrar clase</button>`;
     body = `
@@ -643,7 +672,7 @@ function viewClase(g){
             <button class="tb" data-cmd="insertUnorderedList" title="Lista con viñetas" aria-label="Lista">•≡</button>
             <button class="tb" data-cmd="link" title="Insertar link" aria-label="Insertar link">🔗</button>
             <button class="tb" data-cmd="removeFormat" title="Quitar formato" aria-label="Quitar formato">⌫</button>
-            ${VOZ ? `<button class="tb mic" id="micBtn" data-cmd="mic" title="Dictar por voz" aria-label="Dictar por voz" aria-pressed="false">🎤</button>` : `<span class="muted" style="font-size:.78rem" title="El dictado por voz funciona en Chrome y Edge. En Windows también podés usar Windows + H.">🎤 no disponible en este navegador</span>`}
+            ${VOZ ? `<button class="tb mic" id="micBtn" data-cmd="mic" title="Dictar por voz" aria-label="Dictar por voz" aria-pressed="false">🎤</button>` : `<span class="muted" style="font-size:.78rem" title="El dictado por voz funciona en Chrome y Edge. En Windows también podés usar Windows + H.">🎤 ${(window.claude && window.claude.use) ? "en la libreta descargada" : "no disponible en este navegador"}</span>`}
           </div></div>
         <div class="tema" id="tema" contenteditable="true" role="textbox" aria-multiline="true" aria-labelledby="temaLbl" data-ph="Ej.: Formularios JSP y request.getParameter">${c.temaHtml ? limpiarHtml(c.temaHtml) : esc(c.tema || "").replace(/\n/g, "<br>")}</div>
         <div class="row" id="colorRow" hidden role="group" aria-label="Elegir color">${PALETA.map(([n, h]) => `<button class="tb sw" data-cmd="color" data-color="${h}" title="${n}" aria-label="${n}"><span style="background:${h}"></span></button>`).join("")}<button class="tb" data-cmd="color" data-color="" title="Sin color (el color normal del texto)">Sin color</button></div>
@@ -654,14 +683,19 @@ function viewClase(g){
         <div class="row"><label for="horas" class="muted">Horas</label><input class="field cfgnum" id="horas" type="number" min="1" max="12" step="1" value="${esc(horasClase(g, c))}" title="Horas de clase de este día: cada ausencia cuenta esa cantidad de faltas"></div>
         <div class="row">${asis ? `<button class="btn sm" data-act="allP" data-c="${asis.id}">Todos presentes</button>` : ""}${conf}</div>
       </div>
+      ${vozBox()}
       <div class="stats" id="stats"></div>
       <div class="sheet"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>
       ${barra}
-      <div class="legend"><span><b>P</b>Presente</span><span><b>A</b>Ausente</span><span><b>T</b>Tarde</span><span><b>J</b>Justificada</span><span><b>2h</b>Horas que faltó: tocar para cambiar si se fue antes o llegó a otra hora</span><span><b>f</b>Faltas fictas acumuladas, por horas (A + J/2 + T/2)</span><span><b>✓</b>Hecho</span><span><b>½</b>Parcial</span><span><b>✗</b>No hecho</span><span><b>MB B R M</b>Conducta: muy buena, buena, regular, mala</span><span>Tocá una celda para cambiar su valor.</span></div>`;
+      <div class="legend"><span><b>P</b>Presente</span><span><b>A</b>Ausente</span><span><b>T</b>Tarde</span><span><b>J</b>Justificada</span><span><b>2h</b>Horas que faltó: tocar para cambiar si se fue antes o llegó a otra hora</span><span><b>f</b>Faltas fictas acumuladas, por horas (A + J/2 + T/2)</span><span><b>✓</b>Hecho</span><span><b>½</b>Parcial</span><span><b>✗</b>No hecho</span><span><b>MB B R M</b>Conducta: muy buena, buena, regular, mala</span><span>Tocá una celda para cambiar su valor, o usá el teclado: P A T J en asistencia.</span><span>Tocá un nombre para ver su ficha.</span></div>`;
   }
   return `<section class="panel">
     <div class="row spread">
-      <div class="row"><label for="fecha"><h2>Clase del</h2></label><input type="date" class="field" id="fecha" value="${S.fecha}"><button class="btn sm ghost" data-act="today">Hoy</button></div>
+      <div class="row"><label for="fecha"><h2>Clase del</h2></label>
+        <button class="btn sm navc" data-act="prevc" title="Clase anterior registrada" aria-label="Clase anterior" ${fechasOrden().some(f => f < S.fecha) ? "" : "disabled"}>‹</button>
+        <input type="date" class="field" id="fecha" value="${S.fecha}">
+        <button class="btn sm navc" data-act="nextc" title="Clase siguiente registrada" aria-label="Clase siguiente" ${fechasOrden().some(f => f > S.fecha) ? "" : "disabled"}>›</button>
+        <button class="btn sm ghost" data-act="today">Hoy</button></div>
       <span class="muted">${fmtDate(S.fecha, true)}</span>
     </div>
     ${fechas.length ? `<div class="dates" aria-label="Clases registradas">${chips}</div>` : ""}
@@ -692,6 +726,308 @@ function refrescarAsis(g, sid){
   for (const k of (g.columnas || []).filter(k => k.tipo === "asistencia")) { const td = document.getElementById(`cl-${sid}-${k.id}`); if (td) td.innerHTML = asisInner(c, e, k); }
   const fb = document.getElementById("fb-" + sid); if (fb) fb.outerHTML = badgeFictas(g, e);
 }
+/* ---------- carga por voz (o escribiendo): "Ana presente, Luis ausente dos horas, Mateo nota 8" ---------- */
+const sinAcentos = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+/* clave fonética simple, para que "Thiago" encuentre a "Tihago" y "Naomi" a "Nahomi" */
+const fon = w => w.replace(/ch/g, "\u0001").replace(/h/g, "").replace(/\u0001/g, "ch").replace(/qu/g, "k").replace(/c([ei])/g, "s$1").replace(/c/g, "k")
+  .replace(/z/g, "s").replace(/v/g, "b").replace(/ll/g, "i").replace(/y/g, "i").replace(/w/g, "u").replace(/(.)\1+/g, "$1");
+function lev(a, b){
+  if (a === b) return 0; const m = a.length, n = b.length; if (!m || !n) return m || n;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) { const cur = [i]; for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+  return prev[n];
+}
+const NUM = { cero: 0, uno: 1, una: 1, un: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
+const VOCAB = new Set(("presente presentes vino estuvo aca aqui ausente ausentes falto falta faltas no tarde llego justificada justificado justifico justificar certificado " +
+  "hora horas nota notas puso saco conducta comportamiento porto muy buena bueno buen bien regular mala malo mal excelente menos mas actividad tarea trabajo trabajos ejercicio ejercicios " +
+  "entrego entrega hizo hecha hecho completa completo completo termino si parcial medias medio mitad incompleta incompleto nada observacion observaciones comentario anotar anota " +
+  "y con todos todas resto demas el la lo los las de del se fue antes retiro tiene tuvo saca le en " + Object.keys(NUM).join(" ")).split(" "));
+const OBS_KW = new Set(["observacion", "observaciones", "comentario", "anotar", "anota"]);
+const vozHist = { log: [], undo: [] };
+let recCmd = null;
+function tokenizar(txt){
+  const raw = String(txt || "").replace(/(\d)[.,](\d)/g, "$1\u0002$2").split(/[\s,;:!?¡¿()"]+|\.+/).filter(Boolean).map(w => w.replace(/\u0002/g, ","));
+  return raw.map(w => ({ raw: w, n: sinAcentos(w).replace(/,/g, ".").replace(/[^a-z0-9ñ.]/g, "").replace(/ñ/g, "n") })).filter(t => t.n);
+}
+function indiceNombres(g){
+  const idx = new Map(); // clave fonética -> Set(ids)
+  const add = (k, id) => { if (!k) return; if (!idx.has(k)) idx.set(k, new Set()); idx.get(k).add(id); };
+  for (const e of activos(g)) {
+    const p = tokenizar(e.nombre).map(t => fon(t.n)).filter(Boolean); if (!p.length) continue;
+    add(p.join(" "), e.id); add(p[0], e.id); add(p[p.length - 1], e.id);
+    if (p.length > 2) { add(p[0] + " " + p[p.length - 1], e.id); add(p[0] + " " + p[1], e.id); add(p.slice(1).join(" "), e.id); }
+  }
+  return idx;
+}
+/* busca un nombre que empiece en la posición i: primero exacto (el más largo), después parecido */
+function buscarNombre(toks, i, idx){
+  const libre = t => t && !VOCAB.has(t.n) && !/^\d/.test(t.n);
+  if (!libre(toks[i])) return null;
+  for (let n = 3; n >= 1; n--) {
+    const seg = toks.slice(i, i + n); if (seg.length < n || !seg.every(libre)) continue;
+    const k = seg.map(t => fon(t.n)).join(" "), ids = idx.get(k);
+    if (ids) return { ids: [...ids], n, dicho: seg.map(t => t.raw).join(" ") };
+  }
+  for (let n = 2; n >= 1; n--) {
+    const seg = toks.slice(i, i + n); if (seg.length < n || !seg.every(libre)) continue;
+    const k = seg.map(t => fon(t.n)).join(" "); if (k.length < 4) continue;
+    const tope = k.length >= 8 ? 2 : 1; let mejor = tope + 1, ids = new Set();
+    for (const [clave, s] of idx) { if (clave.split(" ").length !== n) continue; const d = lev(k, clave); if (d < mejor) { mejor = d; ids = new Set(s); } else if (d === mejor) s.forEach(x => ids.add(x)); }
+    if (mejor <= tope) return { ids: [...ids], n, dicho: seg.map(t => t.raw).join(" "), aprox: true };
+  }
+  return null;
+}
+function colPorNombre(cols, s, tipo){ // la columna de ese tipo cuyo nombre aparece en lo dicho (la de nombre más largo)
+  const cand = cols.filter(k => k.tipo === tipo);
+  const conNombre = cand.filter(k => { const w = tokenizar(k.nombre).map(t => t.n); return w.length && w.every(x => (" " + s + " ").includes(" " + x + " ")); })
+    .sort((a, b) => b.nombre.length - a.nombre.length);
+  return conNombre[0] || cand.find(k => (grupo().columnas || []).includes(k)) || cand[0] || null;
+}
+function numeroEn(s){ // "8", "7,5", "siete", "siete y medio", "seis con cinco"
+  const re = /\b(\d+(?:\.\d+)?|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)(?:\s+(?:y|con)\s+(medio|cinco|5))?\b/;
+  const m = re.exec(s); if (!m) return null;
+  let n = /^\d/.test(m[1]) ? Number(m[1]) : NUM[m[1]]; if (m[2]) n += 0.5;
+  return { n, txt: m[0] };
+}
+/* traduce lo dicho sobre un estudiante en cambios de columnas */
+function accionesDe(g, c, toks){
+  const cols = colsClase(g, c), ops = [], s = toks.map(t => t.n).join(" ");
+  let resto = s;
+  const io = toks.findIndex(t => OBS_KW.has(t.n));
+  if (io >= 0) {
+    const k = cols.find(x => x.tipo === "texto"); let txt = puntuar(toks.slice(io + 1).map(t => t.raw).join(" "));
+    txt = txt.replace(/^\p{Ll}/u, m => m.toUpperCase());
+    if (k && txt) ops.push({ k, v: txt, obs: true });
+    resto = toks.slice(0, io).map(t => t.n).join(" ");
+  }
+  const kA = cols.find(x => x.tipo === "asistencia");
+  let h = null; const mh = /\b(\d+|un|una|uno|dos|tres|cuatro|cinco|seis)\s+horas?\b/.exec(resto);
+  if (mh) { h = /^\d/.test(mh[1]) ? Number(mh[1]) : NUM[mh[1]]; resto = resto.replace(mh[0], " "); }
+  if (kA) {
+    let v = "";
+    if (/\bjustific|\bcertificado\b/.test(resto)) v = "J";
+    else if (/\btarde\b/.test(resto)) v = "T";
+    else if (/\b(ausentes?|falto|falta|no vino|no esta|se fue|se retiro)\b/.test(resto)) v = "A";
+    else if (/\b(presentes?|vino|estuvo|aca|aqui)\b/.test(resto)) v = "P";
+    else if (h) v = "A";
+    if (v) ops.push({ k: kA, v, h: (v === "A" || v === "J") && h ? h : null });
+  }
+  const kE = colPorNombre(cols, resto, "entrega");
+  const hayEntrega = kE && (/\b(actividad|tarea|trabajos?|ejercicios?|entrego|entrega|hizo|termino|completo)\b/.test(resto) || (tokenizar(kE.nombre).length && tokenizar(kE.nombre).every(t => (" " + resto + " ").includes(" " + t.n + " "))));
+  if (hayEntrega) {
+    const v = /\b(no (la |lo |el |los |las )?(hizo|entrego|termino|completo|trajo|hecha|hecho)|nada|(actividad|tarea|trabajos?|ejercicios?) no)\b/.test(resto) ? "N"
+      : /\b(parcial|a medias|medio|mitad|incomplet[oa])\b/.test(resto) ? "M" : "S";
+    ops.push({ k: kE, v });
+  }
+  const kC = cols.find(x => x.tipo === "conducta");
+  if (kC && (/\b(conducta|comportamiento|porto)\b/.test(resto) || !hayEntrega)) {
+    const v = /\b(muy (buena|bueno|bien)|excelente)\b/.test(resto) ? "CMB" : /\b(regular|mas o menos)\b/.test(resto) ? "CR" : /\b(mala|malo|mal)\b/.test(resto) ? "CM" : /\b(buena|bueno|bien)\b/.test(resto) ? "CB" : "";
+    if (v) ops.push({ k: kC, v });
+  }
+  const num = numeroEn(resto.replace(/\b(muy|mas o menos)\b/g, " "));
+  if (num) {
+    const kN = colPorNombre(cols, resto, "nota");
+    if (kN) ops.push(num.n >= 1 && num.n <= NOTA_MAX ? { k: kN, v: String(num.n) } : { error: `La nota tiene que ir de 1 a ${NOTA_MAX} (escuché ${fmtN(num.n)}).` });
+  }
+  return ops;
+}
+function describir(op, g, c){
+  if (op.k.tipo === "asistencia") return LONG[op.v] + (op.h && op.h < horasClase(g, c) ? ` (${op.h} h)` : "");
+  if (op.k.tipo === "nota") return `${op.k.nombre} ${fmtN(Number(op.v))}`;
+  if (op.k.tipo === "texto") return `${op.k.nombre}: «${op.v}»`;
+  return `${op.k.nombre}: ${LONG[op.v] || op.v}`;
+}
+function vozLog(ok, txt){ vozHist.log.unshift({ ok, txt }); vozHist.log.length = Math.min(vozHist.log.length, 12); const ul = $("#vozLog"); if (ul) ul.innerHTML = vozLogHtml(); }
+const vozLogHtml = () => vozHist.log.map(x => `<li class="${x.ok ? "ok" : "no"}">${x.ok ? "✓" : "?"} ${esc(x.txt)}</li>`).join("");
+function deshacerVoz(){
+  const paso = vozHist.undo.pop(); if (!paso) { toast("No hay nada para deshacer"); return; }
+  const g = grupo();
+  for (const u of paso.cambios.slice().reverse()) {
+    const c = S.clases[u.fecha]; if (!c) continue; c.valores ||= {}; c.valores[u.sid] ||= {};
+    if (u.prev === "") delete c.valores[u.sid][u.kid]; else c.valores[u.sid][u.kid] = u.prev;
+    if (u.prevH === undefined) delete c.valores[u.sid][HKEY(u.kid)]; else c.valores[u.sid][HKEY(u.kid)] = u.prevH;
+    saveClaseSoon(u.fecha);
+  }
+  vozLog(true, "Deshecho: " + paso.txt); if (S.tab === "clase") render();
+  if (g) marcarFilas(paso.cambios.map(u => u.sid));
+}
+function marcarFilas(ids){ for (const id of new Set(ids)) { const tr = document.querySelector(`tr[data-sid="${CSS.escape(id)}"]`); if (tr) { tr.classList.remove("flash"); void tr.offsetWidth; tr.classList.add("flash"); } } }
+/* ejecuta un comando dicho o escrito; devuelve true si hizo algún cambio */
+function ejecutarComando(texto){
+  const g = grupo(); if (!g) return false;
+  let toks = tokenizar(texto); if (!toks.length) return false;
+  const todo = toks.map(t => t.n).join(" ");
+  if (/^(deshacer|deshace|deshaz|borra(r)? lo ultimo|me equivoque|anular|anula)\b/.test(todo)) { deshacerVoz(); return true; }
+  if (toks.length <= 3 && /\b(terminar|termine|terminamos|listo|parar|detener|basta)\b/.test(todo)) { if (recCmd) { recCmd.activo = false; recCmd.stop(); } return false; }
+  const nueva = !S.clases[S.fecha]; // si no hay clase ese día, se crea solo si el comando cambia algo
+  const c = S.clases[S.fecha] || { fecha: S.fecha, tema: "", horas: horasGrupo(g), valores: {} };
+  // "el resto presente", "los demás presentes", "todos presentes"
+  let resto = false;
+  for (let i = 0; i < toks.length; i++) {
+    if (!["resto", "demas", "todos", "todas"].includes(toks[i].n)) continue;
+    const j = toks.slice(i + 1, i + 4).findIndex(t => /^presentes?$/.test(t.n)); if (j < 0) continue;
+    const ini = i > 0 && ["el", "los", "las"].includes(toks[i - 1].n) ? i - 1 : i;
+    toks.splice(ini, i + 1 + j + 1 - ini); resto = true; break;
+  }
+  const idx = indiceNombres(g), segs = [], errores = [];
+  let cur = null, sueltas = [];
+  for (let i = 0; i < toks.length;) {
+    const m = cur && cur.obs ? null : buscarNombre(toks, i, idx);
+    if (m) { cur = { ...m, toks: [] }; segs.push(cur); i += m.n; continue; }
+    if (cur) { cur.toks.push(toks[i]); if (OBS_KW.has(toks[i].n)) cur.obs = true; } else sueltas.push(toks[i].raw);
+    i++;
+  }
+  const cambios = [], hechos = [];
+  for (const sg of segs) {
+    const nom = sg.ids.map(id => (g.estudiantes.find(e => e.id === id) || {}).nombre);
+    if (sg.ids.length > 1) { errores.push(`«${sg.dicho}» puede ser ${nom.slice(0, -1).join(", ")} o ${nom[nom.length - 1]}. Decí nombre y apellido.`); continue; }
+    const sid = sg.ids[0], ops = accionesDe(g, c, sg.toks);
+    if (!ops.length) { errores.push(`No entendí qué marcar para ${nom[0]}${sg.toks.length ? ` («${sg.toks.map(t => t.raw).join(" ")}»)` : ""}.`); continue; }
+    const desc = [];
+    for (const op of ops) {
+      if (op.error) { errores.push(`${nom[0]}: ${op.error}`); continue; }
+      c.valores ||= {}; c.valores[sid] ||= {};
+      const prev = val(c, sid, op.k.id), prevH = c.valores[sid][HKEY(op.k.id)];
+      let v = op.v; if (op.obs && prev) v = prev.replace(/[.\s]*$/, "") + ". " + v;
+      cambios.push({ fecha: S.fecha, sid, kid: op.k.id, prev, prevH });
+      c.valores[sid][op.k.id] = v;
+      if (op.k.tipo === "asistencia") { delete c.valores[sid][HKEY(op.k.id)]; if (op.h && op.h < horasClase(g, c)) c.valores[sid][HKEY(op.k.id)] = op.h; }
+      desc.push(describir(op, g, c));
+    }
+    if (desc.length) hechos.push(`${nom[0]}${sg.aprox ? ` (dijiste «${sg.dicho}»)` : ""}: ${desc.join(" · ")}`);
+  }
+  if (resto) {
+    const kA = colsClase(g, c).find(x => x.tipo === "asistencia"); let n = 0;
+    if (kA) for (const e of activos(g)) { c.valores ||= {}; c.valores[e.id] ||= {}; if (!c.valores[e.id][kA.id]) { cambios.push({ fecha: S.fecha, sid: e.id, kid: kA.id, prev: "", prevH: undefined }); c.valores[e.id][kA.id] = "P"; n++; } }
+    hechos.push(n ? `El resto presente (${n})` : "Ya estaban todos marcados");
+  }
+  if (!segs.length && !resto) errores.push(sueltas.length ? `No encontré ningún estudiante en «${sueltas.join(" ")}».` : "No entendí el comando.");
+  if (cambios.length && nueva) S.clases[S.fecha] = c;
+  if (cambios.length) { vozHist.undo.push({ cambios, txt: hechos.join(" — ") }); if (vozHist.undo.length > 30) vozHist.undo.shift(); saveClaseSoon(S.fecha); }
+  hechos.forEach(h => vozLog(true, h)); errores.forEach(e => vozLog(false, e));
+  if (cambios.length && S.tab === "clase") { render(); marcarFilas(cambios.map(u => u.sid)); }
+  return cambios.length > 0;
+}
+function vozInfo(msg){ S.vozInfo = msg || ""; const el = $("#vozCmdTxt"); if (el) { el.textContent = S.vozInfo; el.hidden = !S.vozInfo; } }
+function vozCmdToggle(){
+  if (recCmd) { recCmd.activo = false; recCmd.stop(); return; }
+  if (rec) { rec.activo = false; rec.stop(); } // un solo dictado a la vez
+  const ANDROID = /Android/i.test(navigator.userAgent);
+  let error = "";
+  const boton = on => { const b = $("#vozCmdBtn"); if (b) { b.setAttribute("aria-pressed", String(on)); b.textContent = on ? "■ Dejar de escuchar" : "🎤 Cargar por voz"; } };
+  const arrancar = () => {
+    const r = new RecVoz(); r.lang = "es-UY"; r.continuous = !ANDROID; r.interimResults = !ANDROID; r.activo = true; r.maxAlternatives = 1;
+    r.onstart = () => { boton(true); vozInfo("Escuchando… decí el nombre y lo que hay que marcar. Ej.: «Ana presente», «Luis ausente dos horas», «Mateo nota ocho»."); };
+    r.onresult = ev => {
+      let prov = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const res = ev.results[i];
+        if (res.isFinal) { const t = res[0].transcript.trim(); if (t) { vozInfo("Escuché: «" + t + "»"); ejecutarComando(t); } } else prov += res[0].transcript;
+      }
+      if (prov) vozInfo("… " + prov);
+    };
+    r.onerror = ev => { error = ev.error === "not-allowed" || ev.error === "service-not-allowed" ? "El navegador no tiene permiso para usar el micrófono. Habilitalo con el candado de la barra de direcciones." : ev.error === "network" ? "El dictado necesita conexión a internet." : ""; if (error) r.activo = false; };
+    r.onend = () => {
+      if (r.activo && recCmd === r) { try { arrancar(); return; } catch(e) {} } // Chrome corta solo cada tanto: sigue escuchando
+      recCmd = null; boton(false); vozInfo(error);
+    };
+    recCmd = r;
+    try { r.start(); } catch(e) { recCmd = null; boton(false); vozInfo("No se pudo iniciar el dictado."); }
+  };
+  arrancar();
+}
+function vozBox(){
+  const sinVoz = IN_CLAUDE ? "El dictado por voz funciona en la libreta descargada o en GitHub (Chrome o Edge). Acá podés escribir el comando." : "Este navegador no tiene dictado por voz (usá Chrome o Edge). Podés escribir el comando, o en Windows dictarlo con Windows + H.";
+  return `<div class="vozbox noprint">
+    <div class="row">
+      ${VOZ ? `<button class="btn ${recCmd ? "danger" : "primary"}" id="vozCmdBtn" data-act="vozcmd" aria-pressed="${!!recCmd}">${recCmd ? "■ Dejar de escuchar" : "🎤 Cargar por voz"}</button>` : ""}
+      <form class="row" id="cmdForm" style="flex:1 1 300px"><input class="field" id="cmdIn" autocomplete="off" style="flex:1 1 220px" aria-label="Comando para cargar la clase" placeholder="Ej.: Ana presente, Luis ausente 2 horas, Mateo nota 8, el resto presente"><button class="btn sm">Aplicar</button></form>
+      <button class="btn sm" data-act="vozUndo" ${vozHist.undo.length ? "" : "disabled"} title="Deshace el último comando (también podés decir «deshacer»)">↶ Deshacer</button>
+    </div>
+    <div class="muted" id="vozCmdTxt" style="font-size:.85rem" ${S.vozInfo || !VOZ ? "" : "hidden"}>${esc(S.vozInfo || (VOZ ? "" : sinVoz))}</div>
+    <ul class="vozlog" id="vozLog">${vozLogHtml()}</ul>
+    <details><summary class="muted">Qué se puede decir</summary>
+      <div class="vozayuda">
+        <p><b>Primero el nombre, después lo que hay que marcar.</b> Alcanza con el nombre o el apellido si no se repite en el grupo. Podés decir varios estudiantes seguidos.</p>
+        <ul>
+          <li><b>Asistencia:</b> «Ana presente» · «Luis ausente» · «Mateo tarde» · «Sofía justificada» · «Ian faltó una hora» · «el resto presente»</li>
+          <li><b>Notas:</b> «Mateo nota 8» · «Ana siete y medio» · «Luis escrito 6» (si hay una columna Escrito ese día)</li>
+          <li><b>Actividad:</b> «Ana hizo la actividad» · «Luis actividad parcial» · «Mateo no hizo la tarea»</li>
+          <li><b>Conducta:</b> «Ana conducta muy buena» · «Luis conducta regular» · «Mateo mala»</li>
+          <li><b>Observación:</b> «Ana observación no trajo la computadora coma pidió ayuda» (todo lo que sigue a «observación» se anota)</li>
+          <li><b>Otros:</b> «deshacer» · «terminar»</li>
+        </ul>
+        <p>Con el teclado: en una celda de asistencia tocá <b>P</b>, <b>A</b>, <b>T</b> o <b>J</b> y pasa solo al siguiente estudiante. En actividad, <b>S</b>/<b>P</b>/<b>N</b>; en conducta, <b>1</b> a <b>4</b> (MB, B, R, M); <b>Supr</b> borra; las flechas ↑ ↓ cambian de estudiante.</p>
+      </div>
+    </details>
+  </div>`;
+}
+/* ---------- teclado en la tabla de la clase ---------- */
+function ponerValor(g, sid, k, nv){
+  const c = S.clases[S.fecha]; c.valores ||= {}; c.valores[sid] ||= {};
+  if (k.tipo === "asistencia") delete c.valores[sid][HKEY(k.id)];
+  setVal(sid, k.id, nv);
+  if (k.tipo === "asistencia") refrescarAsis(g, sid);
+  else { const b = document.querySelector(`.cyc[data-s="${CSS.escape(sid)}"][data-c="${CSS.escape(k.id)}"]`); if (b) { b.dataset.v = nv; b.textContent = SHOW[nv] ?? nv; b.title = LONG[nv] || "Sin marcar"; } }
+  updateStats();
+}
+function moverFoco(sid, kid, d){
+  const ids = activos(grupo()).map(e => e.id), i = ids.indexOf(sid), n = ids[i + d]; if (!n) return;
+  const el = document.querySelector(`[data-s="${CSS.escape(n)}"][data-c="${CSS.escape(kid)}"]`); if (el) el.focus();
+}
+document.addEventListener("keydown", ev => {
+  const t = ev.target; if (S.tab !== "clase" || !t.dataset || !t.dataset.s || !t.dataset.c || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); moverFoco(t.dataset.s, t.dataset.c, ev.key === "ArrowDown" ? 1 : -1); return; }
+  if (t.classList.contains("cellin") && ev.key === "Enter") { ev.preventDefault(); moverFoco(t.dataset.s, t.dataset.c, 1); return; }
+  if (!t.classList.contains("cyc")) return;
+  const g = grupo(), c = S.clases[S.fecha]; if (!g || !c) return;
+  const k = colsClase(g, c).find(x => x.id === t.dataset.c); if (!k) return;
+  const mapa = { asistencia: { p: "P", a: "A", t: "T", j: "J" }, entrega: { s: "S", h: "S", p: "M", n: "N" }, conducta: { "1": "CMB", "2": "CB", "3": "CR", "4": "CM" } }[k.tipo] || {};
+  const key = ev.key.toLowerCase(); let nv;
+  if (key in mapa) nv = mapa[key]; else if (ev.key === "Backspace" || ev.key === "Delete") nv = ""; else return;
+  ev.preventDefault(); const sid = t.dataset.s;
+  ponerValor(g, sid, k, nv);
+  if (nv) moverFoco(sid, k.id, 1); else { const el = document.querySelector(`.cyc[data-s="${CSS.escape(sid)}"][data-c="${CSS.escape(k.id)}"]`); if (el) el.focus(); }
+});
+/* ---------- ficha del estudiante ---------- */
+function viewFicha(g, sid){
+  const e = (g.estudiantes || []).find(x => x.id === sid); if (!e) return "";
+  const r = resumenData(g).find(x => x.e.id === sid), cr = colsResumen(g), fechas = fechasOrden();
+  const chips = [];
+  for (const k of cr) { const x = r && r.cols[k.id]; if (!x) continue;
+    if (k.tipo === "asistencia") { const L = limiteFictas(g), nv = nivelFictas(g, x.fictas);
+      chips.push(`<span class="stat">Asistencia <b>${x.pct === null ? "—" : x.pct + "%"}</b></span>`, `<span class="stat ${nv}">Fictas <b>${fmtN(x.fictas)}</b> de ${fmtN(L.max)}</span>`, `<span class="stat">${x.faltas} h injust. · ${x.just} h just. · ${x.tardes} tardes</span>`); }
+    else if (k.tipo === "nota" && x.prom !== null) chips.push(`<span class="stat">${k.todas ? "Promedio ponderado" : "Prom. " + esc(k.nombre)} <b>${x.prom.toFixed(1)}</b>${k.todas || cr.filter(y => y.tipo === "nota").length === 1 ? ` <span class="sit ${sit(x.prom)}">${sit(x.prom)}</span>` : ""}</span>`);
+    else if (k.tipo === "conducta" && CONDUCTA.some(cc => x.cnt[cc])) chips.push(`<span class="stat">Conducta ${CONDUCTA.filter(cc => x.cnt[cc]).map(cc => `<b>${x.cnt[cc]}</b> ${SHOW[cc]}`).join(" · ")}</span>`);
+    else if (k.tipo === "entrega") chips.push(`<span class="stat">${esc(k.nombre)} <b>${x.s}</b> ✓ · ${x.m} ½ · ${x.n} ✗</span>`);
+  }
+  const filas = fechas.slice().reverse().map(f => { const c = S.clases[f], cols = colsClase(g, c), por = t => cols.filter(k => k.tipo === t);
+    const kA = por("asistencia")[0], va = kA ? val(c, sid, kA.id) : "";
+    const cel = (t, fmt) => por(t).map(k => { const v = val(c, sid, k.id); return v ? fmt(k, v) : ""; }).filter(Boolean).join(" ");
+    return `<tr><td><button class="lnk" data-act="pick" data-f="${f}">${fmtDate(f)}</button><div class="muted" style="font-size:.78rem">${horasClase(g, c)} h</div></td>
+      <td class="tcell">${esc(c.tema || "")}</td>
+      <td class="c">${va ? `<span class="mini"><i class="${esc(va)}">${esc(marcaFalta(g, c, sid, kA.id))}</i></span>` : "·"}</td>
+      <td>${cel("entrega", (k, v) => `<span class="mini"><i class="${esc(v)}" title="${esc(k.nombre)}">${esc(SHOW[v] ?? v)}</i></span>${por("entrega").length > 1 ? " " + esc(k.nombre) : ""}`)}</td>
+      <td>${cel("nota", (k, v) => `<span class="mini"><i class="${Number(v) >= APRUEBA ? "S" : "M"}">${esc(k.nombre)} ${esc(v)}</i></span>`)}</td>
+      <td class="c">${cel("conducta", (k, v) => `<span class="mini"><i class="${esc(v)}">${esc(SHOW[v])}</i></span>`)}</td>
+      <td class="tcell">${cel("texto", (k, v) => esc(v))}</td></tr>`; }).join("");
+  return `<div class="modal" id="fichaModal" role="dialog" aria-modal="true" aria-labelledby="fichaTit" data-act="fichaFondo">
+    <section class="panel ficha">
+      <div class="row spread"><div><span class="muted" style="font-size:.8rem;text-transform:uppercase;letter-spacing:.08em">${esc(g.nombre)}</span><h2 id="fichaTit">${esc(e.nombre)}</h2></div>
+        <div class="row noprint">${!IN_CLAUDE ? `<button class="btn sm" data-act="imprimir">Imprimir</button>` : ""}<button class="btn sm" data-act="fichaCerrar" aria-label="Cerrar la ficha">✕ Cerrar</button></div></div>
+      <div class="stats">${chips.join("") || `<span class="muted">Todavía no hay datos de este estudiante.</span>`}</div>
+      ${fechas.length ? `<div class="sheet"><table class="fichatab"><thead><tr><th>Clase</th><th>Tema</th><th class="c">Asist.</th><th>Actividad</th><th>Notas</th><th class="c">Conducta</th><th>Observaciones</th></tr></thead><tbody>${filas}</tbody></table></div>` : ""}
+    </section></div>`;
+}
+function abrirFicha(sid){ S.ficha = sid; pintarFicha(); }
+function pintarFicha(){
+  const box = $("#fichaBox"), g = grupo(); if (!box) return;
+  box.innerHTML = S.ficha && g ? viewFicha(g, S.ficha) : "";
+  document.body.classList.toggle("ficha-open", !!box.innerHTML);
+  if (box.innerHTML) { const b = box.querySelector("[data-act=fichaCerrar]"); if (b) b.focus(); }
+}
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && S.ficha) { S.ficha = null; pintarFicha(); } });
+
 function notaClass(el){ const n = Number(el.value.trim().replace(",", ".")); const has = el.value.trim() !== "" && n >= 1 && n <= NOTA_MAX; el.classList.toggle("aprob", has && n >= APRUEBA); el.classList.toggle("ape", has && n < APRUEBA); }
 function setVal(sid, cid, v){
   const c = S.clases[S.fecha]; c.valores ||= {}; c.valores[sid] ||= {};
@@ -770,13 +1106,13 @@ function viewResumen(g){
     const dias = fechas.map(f => { const c = S.clases[f];
       const bits = cols.map(k => { if (k.todas) return ""; const v = valR(c, r.e.id, k); if (!v) return ""; return k.tipo === "nota" ? `<i class="${Number(v) >= APRUEBA ? "S" : "M"}" title="${esc(k.nombre)}">${k.dia ? esc(k.nombre.slice(0, 1).toUpperCase()) + " " : ""}${esc(v)}</i>` : `<i class="${esc(v)}">${esc(k.tipo === "asistencia" ? marcaFalta(g, c, r.e.id, k.id) : SHOW[v] ?? v)}</i>`; }).join("");
       return `<td><span class="mini">${bits || `<span class="muted">·</span>`}</span></td>`; }).join("");
-    return `<tr><td class="name"><span class="idx">${i+1}</span>${esc(r.e.nombre)}</td>${tot}${dias}</tr>`;
+    return `<tr><td class="name"><span class="idx">${i+1}</span><button class="nm" data-act="ficha" data-sid="${esc(r.e.id)}" title="Ver la ficha de ${esc(r.e.nombre)}">${esc(r.e.nombre)}</button></td>${tot}${dias}</tr>`;
   }).join("");
   const canDl = !!DL.api;
   return `<section class="panel">
     <div class="row spread"><h2>Resumen de ${esc(g.nombre)}</h2>
-      <div class="row">${canDl ? `<button class="btn primary" data-act="xlsx">Descargar planilla Excel</button>` : `<span class="muted">La descarga de archivos no está disponible en esta vista.</span>`}</div></div>
-    <p class="muted" style="margin:0">${fechas.length} clases, del ${fmtDate(fechas[0])} al ${fmtDate(fechas[fechas.length-1])}. El porcentaje de asistencia cuenta P y T sobre las clases marcadas; en rojo, menos de 75 %. Las faltas se cuentan por horas. <b>Fictas</b> = horas A + horas J/2 + tardes/2; límite del grupo: <b>${fmtN(limiteFictas(g).max)}</b> (${limiteFictas(g).pct} % de ${limiteFictas(g).base} horas dictadas), en ámbar al acercarse y en rojo al pasarlo. Con promedio de 5 o más el estudiante aprueba; de 1 a 4 va al APE de diciembre. Tocá una fecha para abrir esa clase.</p>
+      <div class="row">${!IN_CLAUDE ? `<button class="btn" data-act="imprimir">Imprimir</button>` : ""}${canDl ? `<button class="btn primary" data-act="xlsx">Descargar planilla Excel</button>` : `<span class="muted">La descarga de archivos no está disponible en esta vista.</span>`}</div></div>
+    <p class="muted" style="margin:0">${fechas.length} clases, del ${fmtDate(fechas[0])} al ${fmtDate(fechas[fechas.length-1])}. El porcentaje de asistencia cuenta P y T sobre las clases marcadas; en rojo, menos de 75 %. Las faltas se cuentan por horas. <b>Fictas</b> = horas A + horas J/2 + tardes/2; límite del grupo: <b>${fmtN(limiteFictas(g).max)}</b> (${limiteFictas(g).pct} % de ${limiteFictas(g).base} horas dictadas), en ámbar al acercarse y en rojo al pasarlo. Con promedio de 5 o más el estudiante aprueba; de 1 a 4 va al APE de diciembre. Tocá una fecha para abrir esa clase, o un nombre para ver la ficha del estudiante.</p>
     <div class="sheet"><table class="sum"><thead>${head}</thead><tbody>${rows}</tbody></table></div>
   </section>`;
 }
@@ -929,7 +1265,14 @@ document.addEventListener("click", async ev => {
   const act = t.dataset.act, g = grupo();
   if (act === "newgroup") { showNG(true); return; }
   if (act === "tab") { S.tab = t.dataset.t; S.confirm = null; render(); return; }
-  if (act === "pick") { S.fecha = t.dataset.f; S.tab = "clase"; S.confirm = null; render(); return; }
+  if (act === "pick") { S.fecha = t.dataset.f; S.tab = "clase"; S.confirm = null; S.ficha = null; render(); return; }
+  if (act === "prevc" || act === "nextc") { const fs = fechasOrden(), f = act === "prevc" ? fs.filter(x => x < S.fecha).pop() : fs.find(x => x > S.fecha); if (f) { S.fecha = f; S.confirm = null; render(); } return; }
+  if (act === "vozcmd") { vozCmdToggle(); return; }
+  if (act === "vozUndo") { deshacerVoz(); return; }
+  if (act === "ficha") { abrirFicha(t.dataset.sid); return; }
+  if (act === "fichaCerrar") { S.ficha = null; pintarFicha(); return; }
+  if (act === "fichaFondo") { if (ev.target === t) { S.ficha = null; pintarFicha(); } return; }
+  if (act === "imprimir") { window.print(); return; }
   if (act === "today") { S.fecha = todayStr(); render(); return; }
   if (act === "create") { S.clases[S.fecha] = { fecha: S.fecha, tema: "", horas: horasGrupo(g), valores: {} }; saveClaseSoon(S.fecha); render(); return; }
   if (act === "cyc") {
@@ -1044,6 +1387,7 @@ document.addEventListener("submit", ev => {
   ev.preventDefault(); const f = ev.target, g = grupo();
   if (f.id === "addStu") { const v = $("#newStu").value; addNames([v]); setTimeout(() => $("#newStu")?.focus(), 0); }
   if (f.id === "addX") { addExtra($("#xName").value, $("#xTipo").value); return; }
+  if (f.id === "cmdForm") { const inp = $("#cmdIn"), v = inp.value.trim(); if (!v) return; if (ejecutarComando(v)) { const n = $("#cmdIn"); if (n) { n.value = ""; n.focus(); } } else inp.focus(); return; }
   if (f.id === "addCol") { const n = $("#newCol").value.trim(); if (!n) return; g.columnas.push({ id: uid("k"), nombre: n, tipo: $("#newColT").value }); saveGrupoSoon(); render(); }
   if (f.id === "gsForm") { S.gsUrl = $("#gsUrl").value; S.gsClave = $("#gsClave").value; gsConectar($("#gsUrl").value, $("#gsClave").value); return; }
   if (f.id === "ngForm") { const n = $("#ngName").value.trim(); if (!n) return; createGroup(n); showNG(false); $("#ngName").value = ""; }
